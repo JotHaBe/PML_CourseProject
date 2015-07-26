@@ -1,0 +1,141 @@
+---
+title: "Practical Machine Learning - Weight Lifting Activity Recognition"
+author: "Jan H Boer"
+date: "Saturday, July 25, 2015"
+output:
+  html_document:
+    fig_width: 10
+    fig_height: 10
+  keep_md: yes
+---
+
+##1.0 Synopsis  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. The goal of this project is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants [who were asked to perform barbell lifts correctly and incorrectly in 5 different ways] and to 'predict' the manner in which they did the exercise [this is the "classe" variable in the training set].
+
+The training [resp. test] data for this project are available at: 
+
+>https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv  
+>https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). In addition, I consulted the following paper:
+
+>#####Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13). Stuttgart, Germany: ACM SIGCHI, 2013. 
+
+##2.0 Data Preparation
+###2.1 Setup  
+```{r, cache = T}
+suppressMessages(library(caret))
+suppressMessages(library(rpart))
+suppressMessages(library(rpart.plot))
+suppressMessages(library(randomForest))
+suppressMessages(library(corrplot))
+```
+###2.2 Download And Read The Training Data
+```{r, cache = T}
+trainingDataURL  <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+trainingDataFile <- "./pml-training.csv"
+
+if (!file.exists(trainingDataFile)) download.file(trainingDataURL, destfile=trainingDataFile, method="wininet")
+trainingData <- read.csv(trainingDataFile)
+```
+The training data contain *`r nrow(trainingData)`* observations [rows] and *`r ncol(trainingData)`* variables [columns]. The number of complete observations is *`r sum(complete.cases(trainingData))`*.  
+
+###2.3 Download And Read The Testing Data
+```{r, cache = T}
+testingDataURL  <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+testingDataFile <- "./pml-testing.csv"
+
+if (!file.exists(testingDataFile)) download.file(testingDataURL, destfile=testingDataFile, method="wininet")
+testingData <- read.csv(testingDataFile)
+```
+The testing data contain *`r nrow(testingData)`* observations [rows] and *`r ncol(testingData)`* variables [columns]. The number of complete observations is *`r sum(complete.cases(testingData))`*.  
+
+###2.4 Clean The Training Data
+Remove missing values and a few less significant variables.
+```{r, cache = T}
+trainingData <- trainingData[, colSums(is.na(trainingData)) == 0] 
+classe <- trainingData$classe
+junkTrainingData <- grepl("^X|timestamp|window", names(trainingData))
+trainingData <- trainingData[, !junkTrainingData]
+cleanTrainingData <- trainingData[, sapply(trainingData, is.numeric)]
+cleanTrainingData$classe <- classe
+```
+The clean training data contain *`r nrow(cleanTrainingData)`* observations [rows] and *`r ncol(cleanTrainingData)`* variables [columns]. The number of complete observations is now *`r sum(complete.cases(cleanTrainingData))`*.  
+
+###2.5 Clean The Testing Data
+Remove missing values and a few less significant variables.
+```{r, cache = T}
+testingData <- testingData[, colSums(is.na(testingData)) == 0] 
+junkTestingData <- grepl("^X|timestamp|window", names(testingData))
+testingData <- testingData[, !junkTestingData]
+cleanTestingData <- testingData[, sapply(testingData, is.numeric)]
+```
+The clean testing data contain *`r nrow(cleanTestingData)`* observations [rows] and *`r ncol(cleanTestingData)`* variables [columns]. The number of complete observations is now *`r sum(complete.cases(cleanTestingData))`*.  
+
+###2.6 Partition The Clean Training Data
+Partition the cleaned training data into a training data cell (66.7%) and a validation data cell (33.3%).
+```{r, cache = T}
+set.seed(17)
+inTraining <- createDataPartition(cleanTrainingData$classe, p=0.667, list=FALSE)
+trainingDataCell <- cleanTrainingData[ inTraining, ]
+testingDataCell  <- cleanTrainingData[-inTraining, ]
+```
+
+##3.0 Data Modeling
+###3.1 Random Forest Model
+Using the training data cell, construct *5* random forests [i.e. use *5-fold cross validation*], where each forest has *250* trees.  
+```{r, cache = T}
+controlRf <- trainControl(method="cv", 5)
+modelRf <- train(classe ~ ., data=trainingDataCell, method="rf", trControl=controlRf, ntree=250, importance=TRUE)
+modelRf
+```
+###3.2 Estimate The Model's Performance  
+Using the testing data cell, estimate the model's performance.  
+```{r, cache = T}
+predictRf <- predict(modelRf, testingDataCell)
+confusionMatrix(testingDataCell$classe, predictRf)
+```
+```{r, cache = T}
+accuracy <- postResample(predictRf, testingDataCell$classe)
+outOfSampleError <- 1 - as.numeric(confusionMatrix(testingDataCell$classe, predictRf)$overall[1])
+```
+For this model, the Accuracy is *`r accuracy[1]`* [the Kappa is *`r accuracy[2]`*] and the Out-Of-Sample Error is *`r outOfSampleError`*.
+
+
+###3.3 Run The Model On The Clean Testing Data  
+Run the model on the clean testing data, after removing the *`problem_id`*.  
+```{r, cache = T}
+result <- predict(modelRf, cleanTestingData[, -length(names(cleanTestingData))])
+result
+```  
+##4.0 Generate The Prediction Assignment Submission Files    
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(result)
+
+```
+## Appendix: Figures
+
+###1. Variable Importance Plot  
+```{r scatterplot, cache = T}
+plot(varImp(modelRf))
+```
+
+###2. Correlation Matrix Plot 
+```{r, cache = T}
+corrPlot <- cor(trainingDataCell[, -length(names(trainingDataCell))])
+corrplot(corrPlot, addrect = 2, type= "upper", method="circle")
+```
+
+###3. Decision Tree Graph
+```{r, cache = T}
+treeModel <- rpart(classe ~ ., data=trainingDataCell, method="class")
+prp(treeModel)
+```
